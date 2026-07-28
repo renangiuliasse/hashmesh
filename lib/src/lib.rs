@@ -1,11 +1,12 @@
-use std::fmt::Debug;
-
 use rkyv::{Archive, Deserialize, Serialize};
+use std::fmt::Debug;
 
 use crate::client::ClientMessage;
 
 pub mod client;
 pub mod node;
+
+pub const BUFFER_DEFAULT_SIZE: usize = 4096;
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Archive)]
 #[rkyv(compare(PartialEq), derive(Debug))]
@@ -16,7 +17,7 @@ pub struct SoftwareVersion {
 }
 
 impl SoftwareVersion {
-    pub fn project_version() -> Self {
+    pub fn project_version() -> SoftwareVersion {
         let version_str = env!("CARGO_PKG_VERSION");
         let parts: Vec<&str> = version_str.split('.').collect();
         let major = parts[0].parse().expect("Failed to parse major version");

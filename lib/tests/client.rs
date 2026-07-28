@@ -102,3 +102,118 @@ mod tests {
         server_handle.join().expect("server thread panicked");
     }
 }
+
+#[cfg(test)]
+mod p2p_tests {
+    use std::{io::ErrorKind, net::TcpListener as StdTcpListener, time::Duration};
+
+    use tokio::{
+        io::{AsyncReadExt, AsyncWriteExt},
+        net::TcpListener,
+        time::sleep,
+    };
+
+    use lib::{
+        SoftwareVersion,
+        client::{
+            ClientMessage, Fingerprint,
+            p2p::{p2p_initiate_handshake, p2p_waitfor_handshake},
+        },
+    };
+
+    fn get_free_port() -> u16 {
+        StdTcpListener::bind("127.0.0.1:0")
+            .expect("Failed to bind to an ephemeral port")
+            .local_addr()
+            .expect("Failed to get local address")
+            .port()
+    }
+
+    #[tokio::test]
+    async fn test_p2p_handshake_success() {
+        let port = get_free_port();
+        let local_addr = format!("127.0.0.1:{}", port);
+        let client_fingerprint = Fingerprint {
+            key: "client_key".to_string(),
+        };
+        let server_fingerprint = Fingerprint {
+            key: "server_key".to_string(),
+        };
+
+        let addr = local_addr.clone();
+        let sv_fingerprint = server_fingerprint.clone();
+        let sv_fingerprint2 = server_fingerprint.clone();
+        let cl_fingerprint = client_fingerprint.clone();
+
+        let server_handle = tokio::spawn(async move {
+            let (_listener, received_ack) = p2p_waitfor_handshake(addr, sv_fingerprint)
+                .await
+                .expect("Server failed to wait for handshake");
+
+            assert_eq!(received_ack.fingerprint.key, cl_fingerprint.key);
+            assert_eq!(received_ack.version, SoftwareVersion::project_version());
+        });
+
+        sleep(Duration::from_millis(1000)).await;
+
+        let (mut client_stream, received_ack) =
+            p2p_initiate_handshake(local_addr.clone(), client_fingerprint.clone())
+                .await
+                .expect("Client failed to initiate handshake");
+
+        let _ = client_stream.shutdown().await;
+        server_handle.abort();
+
+        assert_eq!(received_ack.fingerprint.key, sv_fingerprint2.key);
+        assert_eq!(received_ack.version, SoftwareVersion::project_version());
+
+        server_handle.await.expect("Server task failed");
+    }
+
+    #[tokio::test]
+    async fn test_p2p_handshake_wrong_message_type() {
+        let port = get_free_port();
+        let local_addr = format!("127.0.0.1:{}", port);
+        let client_fingerprint = Fingerprint {
+            key: "client_key".to_string(),
+        };
+
+        let local_addr2 = local_addr.clone();
+        let server_handle = tokio::spawn(async move {
+            let listener = TcpListener::bind(local_addr.clone())
+                .await
+                .expect("Server failed to bind");
+            let (mut stream, _) = listener
+                .accept()
+                .await
+                .expect("Server failed to accept connection");
+
+            let mut buf = vec![0; 512];
+            let n = stream
+                .read(&mut buf)
+                .await
+                .expect("Server failed to read from client");
+            let _received_message =
+                ClientMessage::deserialize(&buf[..n]).expect("Server failed to deserialize");
+
+            // Server sends a Ping message instead of ClientP2PAck
+            let ping_message = ClientMessage::new_ping();
+            let ping_bytes = ClientMessage::serialize(&ping_message).unwrap();
+            stream
+                .write_all(&ping_bytes)
+                .await
+                .expect("Server failed to send Ping response");
+        });
+
+        sleep(Duration::from_millis(100)).await;
+
+        let result = p2p_initiate_handshake(local_addr2.clone(), client_fingerprint).await;
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::Other);
+        assert!(err.to_string().contains("Received Ping"));
+
+        server_handle.await.expect("Server task failed");
+    }
+}
