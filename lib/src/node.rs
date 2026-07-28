@@ -1,8 +1,10 @@
-pub struct NodeAckResponse { server_config: NodeConfig }
+pub struct NodeAckResponse {
+    server_config: NodeConfig,
+}
 
 pub enum NodeMessage {
     NodeAckResponse,
-    Ping
+    Ping,
 }
 
-pub enum NodeConfig {  }
+pub enum NodeConfig {}
