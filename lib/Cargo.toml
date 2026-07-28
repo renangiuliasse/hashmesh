@@ -1,0 +1,9 @@
+[package]
+name = "lib"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+rkyv = { version = "0.8.17", features = ["default", "bytes-1", "bytecheck"]  }
+serde = { version = "1.0.229", features = ["derive"] }
+tokio = { version = "1.53.1", features = ["full"] }
