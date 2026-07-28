@@ -1,7 +1,6 @@
-use rkyv::{
-    Archive, Archived, Deserialize, Serialize, access, deserialize, rancor::Error, to_bytes,
-    util::AlignedVec,
-};
+use std::fmt::Debug;
+
+use rkyv::{Archive, Deserialize, Serialize};
 
 use crate::client::ClientMessage;
 
@@ -40,19 +39,17 @@ pub struct Ping {
 }
 
 impl Ping {
-    fn new(version: SoftwareVersion, peer_type: &str) -> Self {
+    fn new(peer_type: &str) -> Self {
         Ping {
-            version,
+            version: SoftwareVersion::project_version(),
             peer: peer_type.to_string(),
         }
     }
 }
 
-pub fn serialize_message(msg: &ClientMessage) -> Result<AlignedVec, Error> {
-    to_bytes::<Error>(msg)
-}
-
-pub fn deserialize_message(bytes: &[u8]) -> Result<ClientMessage, Error> {
-    let archived = access::<Archived<ClientMessage>, Error>(bytes).unwrap();
-    deserialize::<ClientMessage, Error>(archived)
+#[derive(Debug, Serialize, Deserialize, PartialEq, Archive)]
+#[rkyv(compare(PartialEq), derive(Debug))]
+enum Message {
+    ClientMessage(ClientMessage),
+    NodeMessage,
 }

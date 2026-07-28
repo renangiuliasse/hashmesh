@@ -2,8 +2,8 @@
 mod tests {
     use std::{io::ErrorKind, net::UdpSocket, sync::mpsc, thread, time::Duration};
 
+    use lib::SoftwareVersion;
     use lib::client::ClientMessage::{self, ClientAck, ClientP2PAck};
-    use lib::{SoftwareVersion, deserialize_message, serialize_message};
 
     #[test]
     fn client_ping() {
@@ -28,12 +28,12 @@ mod tests {
                 Ok((number_of_bytes, src_addr)) => {
                     let received_data = &buf[..number_of_bytes];
 
-                    let received_ping = deserialize_message(received_data)
+                    let received_ping = ClientMessage::deserialize(received_data)
                         .expect("Server failed to deserialize Ping");
 
                     let ping_data = match received_ping {
                         ClientAck => panic!("Received a Client ACK."),
-                        ClientP2PAck => panic!("Received a Peer-to-Peer ACK. What????"),
+                        ClientP2PAck(_ack) => panic!("Received a Peer-to-Peer ACK. What????"),
                         ClientMessage::Ping(ping) => ping,
                     };
 
@@ -46,7 +46,7 @@ mod tests {
 
                     // answer
                     let pong_message = ClientMessage::new_ping();
-                    let buf = serialize_message(&pong_message)
+                    let buf = ClientMessage::serialize(&pong_message)
                         .expect("Serialization of the ping response failed on parallel thread.");
                     server_socket
                         .send_to(&buf, src_addr)
@@ -69,7 +69,7 @@ mod tests {
             .expect("set_read_timeout failed");
 
         let client_ping = ClientMessage::new_ping();
-        let serialized_ping = serialize_message(&client_ping)
+        let serialized_ping = ClientMessage::serialize(&client_ping)
             .expect("Failed to serialize Ping object on main thread.");
 
         client_socket
@@ -80,7 +80,7 @@ mod tests {
         match client_socket.recv_from(&mut response_buf) {
             Ok((number_of_bytes, _src_addr)) => {
                 let response_data = &response_buf[..number_of_bytes];
-                if let ClientMessage::Ping(response) = deserialize_message(response_data)
+                if let ClientMessage::Ping(response) = ClientMessage::deserialize(response_data)
                     .expect("Could not deserialize pong response on main thread.")
                 {
                     println!(
