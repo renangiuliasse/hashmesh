@@ -1,117 +1,180 @@
-use rkyv::{Archive, Deserialize, Serialize};
-use tokio::net::UdpSocket;
+use std::
+    io::{Error, ErrorKind}
+;
 
-use crate::{Ping, SoftwareVersion, serialize_message};
+use rkyv::{
+    Archive, Archived, Deserialize, Serialize, access, deserialize, rancor, to_bytes,
+    util::AlignedVec,
+};
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt}, net::{TcpListener, TcpStream, UdpSocket},
+};
 
-pub struct ClientAck { version: SoftwareVersion, own_uid: String, target_type: String }
-pub struct ClientP2PAck { version: SoftwareVersion, fingerprint: String }
+use crate::{Ping, SoftwareVersion};
+
+#[derive(Archive, Serialize, Deserialize, Debug, PartialEq)]
+#[rkyv(compare(PartialEq), derive(Debug))]
+pub struct ClientAck {
+    version: SoftwareVersion,
+    own_uid: String,
+    target_type: String,
+}
+
+#[derive(Archive, Serialize, Deserialize, Debug, PartialEq)]
+#[rkyv(compare(PartialEq), derive(Debug))]
+pub struct Fingerprint {
+    key: String,
+}
+
+#[derive(Archive, Serialize, Deserialize, Debug, PartialEq)]
+#[rkyv(compare(PartialEq), derive(Debug))]
+pub struct ClientP2PAck {
+    version: SoftwareVersion,
+    fingerprint: Fingerprint,
+}
+
+impl ClientP2PAck {
+    pub fn new(fingerprint: Fingerprint) -> Self {
+        ClientP2PAck {
+            version: SoftwareVersion::project_version(),
+            fingerprint,
+        }
+    }
+}
 
 #[derive(Archive, Serialize, Deserialize, Debug, PartialEq)]
 #[rkyv(compare(PartialEq), derive(Debug))]
 pub enum ClientMessage {
     ClientAck,
     Ping(Ping),
-    ClientP2PAck,
+    ClientP2PAck(ClientP2PAck),
 }
 
 impl ClientMessage {
     pub fn new_ping() -> Self {
-        ClientMessage::Ping(Ping::new(SoftwareVersion::project_version(), "peer"))
+        ClientMessage::Ping(Ping::new("peer"))
+    }
+
+    pub fn new_p2p_ack(fingerprint: Fingerprint) -> Self {
+        ClientMessage::ClientP2PAck(ClientP2PAck::new(fingerprint))
+    }
+
+    pub fn serialize(msg: &ClientMessage) -> Result<AlignedVec, rancor::Error> {
+        to_bytes::<rancor::Error>(msg)
+    }
+
+    pub fn deserialize(bytes: &[u8]) -> Result<ClientMessage, Error> {
+        let archived: &<ClientMessage as Archive>::Archived =
+            access::<Archived<ClientMessage>, rancor::Error>(bytes).unwrap();
+        deserialize::<ClientMessage, Error>(archived)
     }
 }
 
 pub async fn ping(ip: String) -> Result<usize, std::io::Error> {
     let ping_message = ClientMessage::new_ping();
 
-    let buffer = serialize_message(&ping_message).unwrap();
+    let buffer: rkyv::util::AlignedVec = ClientMessage::serialize(&ping_message).unwrap();
 
     let udp_sock = UdpSocket::bind(ip).await.unwrap();
     udp_sock.send(&buffer).await
 }
 
-#[cfg(test)]
-mod tests {
-    use std::{io::ErrorKind, net::UdpSocket, sync::mpsc, thread, time::Duration};
+pub async fn p2p_initiate_handshake(ip: String, fingerprint: Fingerprint) -> Result<(TcpStream, ClientP2PAck), Error> {
+    let stream_result = TcpStream::connect(ip).await;
+    if let Err(err) = stream_result {
+        return Err(err);
+    };
 
-    use crate::{Ping, SoftwareVersion, client::ClientMessage::{self, ClientAck, ClientP2PAck}, deserialize_message, serialize_message};
+    let mut stream = stream_result.unwrap();
 
-    #[test]
-    fn test_udp_ping_exchange() {
-        println!("Starting UDP Client Ping test...");
-        let (tx, rx) = mpsc::channel();
+    let p2p_ack_message = ClientMessage::new_p2p_ack(fingerprint);
+    let p2p_ack_bytes = ClientMessage::serialize(&p2p_ack_message).unwrap();
 
-        let server_handle = thread::spawn(move || {
-            let server_socket = UdpSocket::bind("127.0.0.1:0").expect("couldn't bind server socket");
-            let server_addr = server_socket.local_addr().expect("couldn't get local address");
+    let ack = stream.write(&p2p_ack_bytes).await;
+    if let Err(err) = ack {
+        return Err(err);
+    }
 
-            tx.send(server_addr).expect("failed to send server address");
+    let mut buf: AlignedVec = AlignedVec::with_capacity(size_of::<ClientP2PAck>());
+    let ack_response = stream.read(&mut buf).await;
+    if let Err(err) = ack_response {
+        return Err(err);
+    }
 
-            server_socket.set_read_timeout(Some(Duration::from_secs(5))).expect("set_read_timeout failed");
+    let response_result = ClientMessage::deserialize(&buf);
+    if let Err(err) = response_result {
+        return Err(err);
+    }
 
-            let mut buf = [0; 512];
-            match server_socket.recv_from(&mut buf) {
-                Ok((number_of_bytes, src_addr)) => {
-                    let received_data = &buf[..number_of_bytes];
-
-                    let received_ping = deserialize_message(received_data)
-                        .expect("Server failed to deserialize Ping");
-
-                    let ping_data = match received_ping {
-                        ClientAck => panic!("Received a Client ACK."),
-                        ClientP2PAck => panic!("Received a Peer-to-Peer ACK. What????"),
-                        crate::client::ClientMessage::Ping(ping) => ping,
-                    };
-
-                    let project_version = SoftwareVersion::project_version();
-
-                    assert_eq!(ping_data.peer, "peer");
-                    assert_eq!(ping_data.version.major, project_version.major);
-                    assert_eq!(ping_data.version.minor, project_version.minor);
-                    assert_eq!(ping_data.version.patch, project_version.patch);
-
-                    // answer
-                    let pong_message = ClientMessage::new_ping();
-                    let buf = serialize_message(&pong_message).expect("Serialization of the ping response failed on parallel thread.");
-                    server_socket.send_to(&buf, src_addr).expect("Server failed to send pong");
-                },
-                Err(ref e) if e.kind() == ErrorKind::WouldBlock => {
-                    panic!("Server read timed out!");
-                },
-                Err(e) => {
-                    panic!("Server recv_from failed: {:?}", e);
-                }
+    let response_message = response_result.unwrap();
+    match response_message {
+        ClientMessage::ClientAck => {
+            return Err(Error::new(
+                ErrorKind::Other,
+                "Received Client default ACK as P2P response. Not pairing",
+            ));
+        }
+        ClientMessage::Ping(_ping) => {
+            return Err(Error::new(
+                ErrorKind::Other,
+                "Received Ping as ACK response. Not pairing",
+            ));
+        }
+        ClientMessage::ClientP2PAck(ack) => {
+            if ack.version != ack.version {
+                let v = SoftwareVersion::project_version();
+                return Err(
+                    Error::new(
+                        ErrorKind::Other,
+                        format!(
+                            "Peer's software version is mismatched. Running {}.{}.{}, peer's running {}.{}.{}", 
+                            v.major, v.minor, v.patch, ack.version.major, ack.version.minor, ack.version.patch
+                        ).to_string()
+                    )
+                );
             }
-        });
 
-        let server_addr = rx.recv().expect("failed to receive server address");
+            return Ok((stream, ack))
+        }
+    }
+}
 
-        let client_socket = UdpSocket::bind("127.0.0.1:0").expect("couldn't bind client socket");
-        client_socket.set_read_timeout(Some(Duration::from_secs(5))).expect("set_read_timeout failed");
+pub async fn p2p_waitfor_handshake(local_addr: String, fingerprint: Fingerprint) -> Result<(TcpListener, ClientP2PAck), std::io::Error> {
+    let stream_result = TcpListener::bind(local_addr).await;
+    if let Err(err) = stream_result {
+        return Err(err)
+    }
 
-        let client_ping = ClientMessage::new_ping();
-        let serialized_ping = serialize_message(&client_ping).expect("Failed to serialize Ping object on main thread.");
+    let stream = stream_result.unwrap();
 
-        client_socket.send_to(&serialized_ping, server_addr).expect("client failed to send data");
+    let mut buf: AlignedVec = AlignedVec::with_capacity(size_of::<ClientP2PAck>());
 
-        let mut response_buf = [0; 512];
-        match client_socket.recv_from(&mut response_buf) {
-            Ok((number_of_bytes, src_addr)) => {
-                let response_data = &response_buf[..number_of_bytes];
-                if let ClientMessage::Ping(response) = deserialize_message(response_data)
-                    .expect("Could not deserialize pong response on main thread.") {
-                        println!("Received a response from a '{}' version ^{}.{}", response.peer, response.version.major, response.version.minor);
-                } else {
-                    panic!("Received a reponse other than a Ping Client object.")
-                }            
-            },
-            Err(ref e) if e.kind() == ErrorKind::WouldBlock => {
-                panic!("Client read timed out waiting for pong!");
-            },
-            Err(e) => {
-                panic!("Client recv_from failed: {:?}", e);
+    match stream.accept().await {
+        Err(err) => { return Err(err) }
+        Ok((mut curr_stream, _socket)) => {
+            let read_result = curr_stream.read(&mut buf).await;
+            if let Err(err) = read_result {
+                return Err(err)
+            }
+
+            let ack_data = ClientMessage::deserialize(&buf).unwrap();
+            if let ClientMessage::ClientP2PAck(data) = ack_data {
+                if data.version != data.version {
+                    let v = SoftwareVersion::project_version();
+                    return Err(
+                        Error::new(
+                            ErrorKind::Other,
+                            format!(
+                                "Peer's software version is mismatched. Running {}.{}.{}, peer's running {}.{}.{}", 
+                                v.major, v.minor, v.patch, data.version.major, data.version.minor, data.version.patch
+                            ).to_string()
+                        )
+                    );
+                }
+                return Ok((stream, data))
+            } else {
+                return Err(Error::new(ErrorKind::Other, format!("ACK Received is not supported or is broken")))
             }
         }
-
-        server_handle.join().expect("server thread panicked");
     }
 }

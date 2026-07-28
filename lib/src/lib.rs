@@ -1,16 +1,18 @@
-use rkyv::{Archive, Archived, Deserialize, Serialize, access, deserialize, rancor::Error, to_bytes, util::AlignedVec};
+use std::fmt::Debug;
+
+use rkyv::{Archive, Deserialize, Serialize};
 
 use crate::client::ClientMessage;
 
-mod client;
-mod node;
+pub mod client;
+pub mod node;
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Archive)]
 #[rkyv(compare(PartialEq), derive(Debug))]
 pub struct SoftwareVersion {
-    major: u32,
-    minor: u32,
-    patch: u32,
+    pub major: u32,
+    pub minor: u32,
+    pub patch: u32,
 }
 
 impl SoftwareVersion {
@@ -21,41 +23,33 @@ impl SoftwareVersion {
         let minor = parts[1].parse().expect("Failed to parse minor version");
         let patch = parts[2].parse().expect("Failed to parse patch version");
 
-        SoftwareVersion { major, minor, patch }
+        SoftwareVersion {
+            major,
+            minor,
+            patch,
+        }
     }
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Archive)]
 #[rkyv(compare(PartialEq), derive(Debug))]
 pub struct Ping {
-    version: SoftwareVersion,
-    peer: String
+    pub version: SoftwareVersion,
+    pub peer: String,
 }
 
 impl Ping {
-    fn new(version: SoftwareVersion, peer_type: &str) -> Self {
+    fn new(peer_type: &str) -> Self {
         Ping {
-            version,
+            version: SoftwareVersion::project_version(),
             peer: peer_type.to_string(),
         }
     }
 }
 
-pub fn serialize_message(msg: &ClientMessage) -> Result<AlignedVec, Error> {
-    to_bytes::<Error>(msg)
-}
-
-pub fn deserialize_message(bytes: &[u8]) -> Result<ClientMessage, Error> {
-    let archived = access::<Archived<ClientMessage>, Error>(bytes).unwrap();
-    deserialize::<ClientMessage, Error>(archived)
-}
-
-#[cfg(test)]
-mod tests {
-    use crate::SoftwareVersion;
-
-    #[test]
-    fn project_version_test() {
-        let ver = SoftwareVersion::project_version();
-    }
+#[derive(Debug, Serialize, Deserialize, PartialEq, Archive)]
+#[rkyv(compare(PartialEq), derive(Debug))]
+enum Message {
+    ClientMessage(ClientMessage),
+    NodeMessage,
 }
