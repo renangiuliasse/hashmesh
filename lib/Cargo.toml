@@ -4,6 +4,10 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+hex-literal = "1.1.0"
+hmac = "0.13.0"
 rkyv = { version = "0.8.17", features = ["default", "bytes-1", "bytecheck"]  }
+rust-crypto = "0.2.36"
 serde = { version = "1.0.229", features = ["derive"] }
 tokio = { version = "1.53.1", features = ["full"] }
+uuid = { version = "1.24.0", features = ["v4", "v7", "rng", "fast-rng"] }

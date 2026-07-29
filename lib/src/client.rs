@@ -1,15 +1,35 @@
 use std::io::Error;
 
+use crypto::hmac::Hmac;
 use rkyv::{
     Archive, Archived, Deserialize, Serialize, access, deserialize, rancor, to_bytes,
     util::AlignedVec,
 };
 
 use tokio::net::UdpSocket;
+use uuid::{Builder, Uuid, uuid};
 
 use crate::{Ping, SoftwareVersion};
 
 pub mod p2p;
+
+#[derive(Archive, Serialize, Deserialize, Debug, PartialEq)]
+#[rkyv(compare(PartialEq), derive(Debug))]
+pub struct User {
+    id: String
+}
+impl User {
+    pub fn change_id(&self, id: String) -> Result<Self, &Self> {
+        if id.len() > 32 { return Err(&self) }
+
+        Ok(User { id })
+    }
+    pub fn generate_id(&self) -> Self {
+        let uuid = Uuid::new_v4().simple().to_string();
+        
+        User { id: uuid }
+    }
+}
 
 #[derive(Archive, Serialize, Deserialize, Debug, PartialEq)]
 #[rkyv(compare(PartialEq), derive(Debug))]
@@ -30,6 +50,14 @@ pub struct Fingerprint {
 pub struct ClientP2PAck {
     pub version: SoftwareVersion,
     pub fingerprint: Fingerprint,
+}
+
+#[derive(Archive, Serialize, Deserialize, Debug, PartialEq)]
+#[rkyv(compare(PartialEq), derive(Debug))]
+pub struct ClientP2PExchangePayload {
+    encrypted_message: Vec<u8>,
+    mac: Vec<u8>,
+    peer_id: String
 }
 
 impl ClientP2PAck {
