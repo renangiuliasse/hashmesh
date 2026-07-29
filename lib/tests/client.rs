@@ -32,6 +32,9 @@ mod tests {
                         .expect("Server failed to deserialize Ping");
 
                     let ping_data = match received_ping {
+                        ClientMessage::ClientP2PExchangePayload(_) => {
+                            panic!("Received P2P message payload")
+                        }
                         ClientAck => panic!("Received a Client ACK."),
                         ClientP2PAck(_ack) => panic!("Received a Peer-to-Peer ACK. What????"),
                         ClientMessage::Ping(ping) => ping,
@@ -45,7 +48,7 @@ mod tests {
                     assert_eq!(ping_data.version.patch, project_version.patch);
 
                     // answer
-                    let pong_message = ClientMessage::new_ping();
+                    let pong_message = ClientMessage::build_ping();
                     let buf = ClientMessage::serialize(&pong_message)
                         .expect("Serialization of the ping response failed on parallel thread.");
                     server_socket
@@ -68,7 +71,7 @@ mod tests {
             .set_read_timeout(Some(Duration::from_secs(5)))
             .expect("set_read_timeout failed");
 
-        let client_ping = ClientMessage::new_ping();
+        let client_ping = ClientMessage::build_ping();
         let serialized_ping = ClientMessage::serialize(&client_ping)
             .expect("Failed to serialize Ping object on main thread.");
 
@@ -107,17 +110,16 @@ mod tests {
 mod p2p_tests {
     use std::{io::ErrorKind, net::TcpListener as StdTcpListener, time::Duration};
 
-    use tokio::{
+    use rkyv::to_bytes;
+use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
         net::TcpListener,
         time::sleep,
     };
 
     use lib::{
-        SoftwareVersion,
-        client::{
-            ClientMessage, Fingerprint,
-            p2p::{p2p_initiate_handshake, p2p_waitfor_handshake},
+        BUFFER_DEFAULT_SIZE, SoftwareVersion, client::{
+            ClientMessage, Fingerprint, User, p2p::{p2p_initiate_handshake, p2p_send_encrypted_message, p2p_waitfor_handshake},
         },
     };
 
@@ -197,7 +199,7 @@ mod p2p_tests {
                 ClientMessage::deserialize(&buf[..n]).expect("Server failed to deserialize");
 
             // Server sends a Ping message instead of ClientP2PAck
-            let ping_message = ClientMessage::new_ping();
+            let ping_message = ClientMessage::build_ping();
             let ping_bytes = ClientMessage::serialize(&ping_message).unwrap();
             stream
                 .write_all(&ping_bytes)
@@ -215,5 +217,40 @@ mod p2p_tests {
         assert!(err.to_string().contains("Received Ping"));
 
         server_handle.await.expect("Server task failed");
+    }
+
+    #[tokio::test]
+    async fn test_p2p_messaging() {
+        let port = get_free_port();
+        let local_addr = format!("127.0.0.1:{}", port);
+        let client_fingerprint = Fingerprint {
+            key: "client_key".to_string(),
+        };
+
+        let server_fingerprint = Fingerprint {
+            key: "server_key".to_string(),
+        };
+
+        let local_addr2 = local_addr.clone();
+        let (mut stream, _) = p2p_waitfor_handshake(local_addr2, server_fingerprint)
+            .await
+            .expect("Could not start node on main thread");
+
+        let mut buf: [u8; BUFFER_DEFAULT_SIZE] = [0; BUFFER_DEFAULT_SIZE];
+
+        let sender_thread = tokio::spawn(async move {
+            let (mut stream, _) = p2p_initiate_handshake(local_addr, client_fingerprint)
+                .await
+                .expect("Could not start initiator client on sender thread");
+
+            let mac = Vec::from([0,1,2,3,4,5,6,7,8,9]);
+            let message = "a random unencrypted message.".to_string();
+            let msg_bytes = message.as_bytes().to_vec();
+            let user = User::new();
+            p2p_send_encrypted_message(stream, user, msg_bytes, mac).await.expect("Could not send message on sender thread");
+        });
+
+        let bytes_read = stream.read(&mut buf).await.expect("Could not receive data on main thread");
+        // let data = buf[..bytes_read];
     }
 }
