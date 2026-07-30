@@ -14,7 +14,7 @@ use tokio::{
 };
 
 use crate::{
-    BUFFER_DEFAULT_SIZE, MAC_SIZE, SoftwareVersion,
+    BUFFER_DEFAULT_SIZE, SoftwareVersion,
     client::{ClientMessage, ClientP2PAck, EncryptedMessage, Fingerprint, MAC, User},
 };
 

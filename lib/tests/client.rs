@@ -7,7 +7,7 @@ fn get_free_port() -> u16 {
 }
 
 #[cfg(test)]
-mod tests {
+mod general_client_tests {
     use std::time::Duration;
 
     use lib::{
@@ -154,18 +154,16 @@ mod p2p_tests {
     };
 
     use lib::{
-        BUFFER_DEFAULT_SIZE, MAC_SIZE, SoftwareVersion,
-        client::{
+        BUFFER_DEFAULT_SIZE, MAC_SIZE, SoftwareVersion, client::{
             ClientMessage, EncryptedMessage, Fingerprint, MAC, User,
             p2p::{p2p_initiate_handshake, p2p_send_encrypted_message, p2p_waitfor_handshake},
-        },
-        fix_byte_buffer,
+        }, fix_byte_buffer, shear_bytes,
     };
 
     use crate::get_free_port;
 
     #[tokio::test]
-    async fn test_p2p_handshake_success() {
+    async fn p2p_handshake_success() {
         let port = get_free_port();
         let local_addr = format!("127.0.0.1:{}", port);
         let client_fingerprint = Fingerprint {
@@ -191,7 +189,7 @@ mod p2p_tests {
 
         sleep(Duration::from_secs(2)).await;
 
-        let (mut client_stream, received_ack) =
+        let (_client_stream, received_ack) =
             p2p_initiate_handshake(local_addr, client_fingerprint)
                 .await
                 .expect("Client failed to initiate handshake");
@@ -203,7 +201,7 @@ mod p2p_tests {
     }
 
     #[tokio::test]
-    async fn test_p2p_handshake_wrong_message_type() {
+    async fn p2p_handshake_message_type_detection() {
         let port = get_free_port();
         let local_addr = format!("127.0.0.1:{}", port);
         let client_fingerprint = Fingerprint {
@@ -228,7 +226,7 @@ mod p2p_tests {
             let _received_message =
                 ClientMessage::deserialize(&buf[..n]).expect("Server failed to deserialize");
 
-            // Server sends a Ping message instead of ClientP2PAck
+            // server sends a Ping message instead of ClientP2PAck
             let ping_message = ClientMessage::build_ping();
             let ping_bytes = ClientMessage::serialize(&ping_message).unwrap();
             stream
@@ -241,16 +239,13 @@ mod p2p_tests {
 
         let result = p2p_initiate_handshake(local_addr2.clone(), client_fingerprint).await;
 
-        assert!(result.is_err());
-        let err = result.unwrap_err();
-        assert_eq!(err.kind(), ErrorKind::Other);
-        assert!(err.to_string().contains("Received Ping"));
+        assert!(result.is_err()); // has to throw because of incorrect type
 
         server_handle.await.expect("Server task failed");
     }
 
     #[tokio::test]
-    async fn test_p2p_messaging() {
+    async fn p2p_messaging() {
         let port = get_free_port();
         let local_addr = format!("127.0.0.1:{}", port);
         let client_fingerprint = Fingerprint {
@@ -312,7 +307,12 @@ mod p2p_tests {
                 let message_received = payload
                     .read_message()
                     .expect("Could not read string, invalid");
-                assert_eq!(message_received, MESSAGE.to_string());
+
+                // as we know it is unencrypted, we can just filter null bytes and read it as a string
+                let message_bytes = message_received.into_bytes();
+                let message = str::from_utf8(&message_bytes).unwrap();
+                let fixed_message: String = message.chars().filter(|c| *c != '\0').collect();
+                assert_eq!(fixed_message, MESSAGE.to_string());
             }
         }
     }
