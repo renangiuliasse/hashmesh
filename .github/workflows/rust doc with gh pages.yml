@@ -44,10 +44,6 @@ jobs:
     - name: Generate documentation
       run: cargo doc --no-deps
 
-    - name: Prepare documentation for GitHub Pages
-      run: |
-        echo "<meta http-equiv=\"refresh\" content=\"0; url=build_wheel\">" > docs/index.html
-
     - name: Upload artifact
       uses: actions/upload-pages-artifact@v3
       with:
