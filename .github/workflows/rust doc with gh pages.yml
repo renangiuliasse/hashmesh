@@ -9,14 +9,19 @@ on:
 env:
   CARGO_TERM_COLOR: always
 
-permissions:
-  contents: read
-  pages: write
-  id-token: write
-
 jobs:
-  build:
+  docs:
     runs-on: ubuntu-latest
+
+    # Grant GITHUB_TOKEN the permissions required to make a Pages deployment
+    permissions:
+      pages: write      # to deploy to Pages
+      id-token: write   # to verify the deployment originates from an appropriate source
+
+    # Deploy to the github-pages environment
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
 
     steps:
     - uses: actions/checkout@v4
@@ -39,9 +44,17 @@ jobs:
         touch target/doc/.nojekyll
         mkdir -p docs
         cp -r target/doc/* docs/
+        echo "<meta http-equiv=\"refresh\" content=\"0; url=build_wheel\">" > docs/index.html
+
+    # - name: Deploy to GitHub Pages
+    #   uses: peaceiris/actions-gh-pages@v4
+    #   id: deployment
+    #   with:
+    #     github_token: ${{ secrets.GITHUB_TOKEN }}
+    #     publish_dir: ./docs
 
     - name: Deploy to GitHub Pages
-      uses: peaceiris/actions-gh-pages@v4
+      id: deployment
+      uses: actions/deploy-pages@v4 # or specific "vX.X.X" version tag for this action
       with:
-        github_token: ${{ secrets.GITHUB_TOKEN }}
         publish_dir: ./docs
