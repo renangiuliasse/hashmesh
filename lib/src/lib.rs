@@ -11,7 +11,11 @@
  */
 
 use rkyv::{Archive, Deserialize, Serialize};
-use std::fmt::Debug;
+use std::{
+    alloc::{Layout, alloc},
+    fmt::Debug,
+    u8,
+};
 
 use crate::client::ClientMessage;
 
@@ -42,6 +46,7 @@ pub enum NodePossibleArchitecture {
 pub const BUFFER_DEFAULT_SIZE: usize = 4096;
 pub const MAC_SIZE: usize = 64;
 pub const USER_ID_SIZE: usize = 32;
+pub const MESSAGE_MAX_SIZE: usize = 512;
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Archive)]
 #[rkyv(compare(PartialEq), derive(Debug))]
@@ -88,4 +93,34 @@ impl Ping {
 enum Message {
     ClientMessage(ClientMessage),
     NodeMessage,
+}
+
+/// Fixes byte array to length "size" and fills missing bytes
+pub fn pad_bytes<const F: usize>(bytes: &[u8], size: usize) -> [u8; F] {
+    let mut buffer = [0u8; F];
+    let min_len = bytes.len().min(size);
+
+    buffer[0..min_len].copy_from_slice(&bytes[0..min_len]);
+
+    return buffer;
+}
+
+/// Shears byte array to length "size" and removes left bytes
+pub fn shear_bytes<const F: usize>(bytes: &[u8]) -> Option<[u8; F]> {
+    if bytes.len() < USER_ID_SIZE {
+        return None;
+    }
+
+    Some(bytes[0..USER_ID_SIZE].try_into().unwrap())
+}
+
+/// Fixes byte array to length "size" by either removing or padding bytes
+pub fn fix_byte_buffer<const F: usize>(bytes: &[u8], size: usize) -> [u8; F] {
+    match shear_bytes::<F>(bytes) {
+        None => {
+            let new_bytes = pad_bytes::<F>(bytes, size);
+            new_bytes
+        }
+        Some(new_bytes) => new_bytes,
+    }
 }

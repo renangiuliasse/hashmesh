@@ -32,6 +32,8 @@
  * Not all of this information is shared at every architecture, it is type-dependent.
  */
 
+use std::io::{Error, ErrorKind::Other, Read};
+
 use rkyv::{
     Archive, Archived, Deserialize, Serialize, access, deserialize, rancor, to_bytes,
     util::AlignedVec,
@@ -40,35 +42,67 @@ use rkyv::{
 use tokio::net::UdpSocket;
 use uuid::Uuid;
 
-use crate::{ClientPossibleArchitecture, Ping, SoftwareVersion};
+use crate::{
+    ClientPossibleArchitecture, MAC_SIZE, MESSAGE_MAX_SIZE, Ping, SoftwareVersion, USER_ID_SIZE,
+};
 
 pub mod p2p;
 
 #[derive(Archive, Serialize, Deserialize, Debug, PartialEq)]
 #[rkyv(compare(PartialEq), derive(Debug))]
 pub struct User {
-    id: String,
+    id: UserID,
 }
 impl User {
-    /// Changes the referred User's ID. Limited to <= (less or equal to) 32 characters only.
-    pub fn change_id(&self, id: String) -> Result<Self, &Self> {
-        if id.len() > 32 {
-            return Err(&self);
-        }
+    /// Appends null bytes for too small UserIDs
+    fn pad_id(id: String) -> UserID {
+        let id_bytes = id.as_bytes();
 
-        Ok(User { id })
+        let mut buffer = [0u8; USER_ID_SIZE];
+        let min_len = id_bytes.len().min(USER_ID_SIZE);
+
+        buffer[0..min_len].copy_from_slice(&id_bytes[0..min_len]);
+
+        let new_id: UserID = buffer;
+        return new_id;
     }
 
-    /// Generates (and changes) a User UUID (random v4) for the referred User.
-    pub fn random_id(mut self) -> User {
-        let uuid = Uuid::new_v4().simple().to_string();
+    /// Shears too big UserIDs
+    fn shear_id(id: String) -> Option<UserID> {
+        let bytes = id.as_bytes();
+        if bytes.len() < USER_ID_SIZE {
+            return None;
+        }
 
-        self.id = uuid;
+        Some(bytes[0..USER_ID_SIZE].try_into().unwrap())
+    }
+
+    /// Changes the referred User's ID. Limited to <= (less or equal to) 32 characters only.
+    pub fn change_id(mut self, id: String) -> Self {
+        match Self::shear_id(id.clone()) {
+            None => {
+                let new_id = Self::pad_id(id);
+                self.id = new_id;
+            }
+            Some(new_id) => self.id = new_id,
+        }
+
         self
     }
 
+    /// Generates (and changes) a random User ID (UUID v4) for the referred User.
+    pub fn random_id(self) -> Self {
+        let uuid = Uuid::new_v4().simple().to_string();
+
+        Self::change_id(self, uuid)
+    }
+
+    /// Builds a new User with random UserID
     pub fn new() -> User {
-        User { id: Uuid::new_v4().simple().to_string() }
+        let user = User {
+            id: [0; USER_ID_SIZE],
+        };
+        user.random_id()
     }
 }
 
@@ -103,22 +137,41 @@ impl ClientP2PAck {
     }
 }
 
+// be very careful with these values as they need to fit under the DEFAULT_BUFFER_SIZE const.
+pub type EncryptedMessage = [u8; MESSAGE_MAX_SIZE];
+pub type MAC = [u8; MAC_SIZE];
+pub type UserID = [u8; USER_ID_SIZE];
+
 /// Used to transport and receive a structed payload (message) from another peer.
 #[derive(Archive, Serialize, Deserialize, Debug, PartialEq)]
 #[rkyv(compare(PartialEq), derive(Debug))]
 pub struct ClientP2PExchangePayload {
-    encrypted_message: Vec<u8>,
-    mac: Vec<u8>,
-    peer_id: String,
+    encrypted_message: EncryptedMessage,
+    mac: MAC,
+    peer_id: UserID,
 }
 
 impl ClientP2PExchangePayload {
-    pub fn new(encrypted_message: Vec<u8>, mac: Vec<u8>, peer_id: String) -> Self {
+    pub fn new(encrypted_message: EncryptedMessage, mac: MAC, peer_id: UserID) -> Self {
         ClientP2PExchangePayload {
             encrypted_message,
             mac,
             peer_id,
         }
+    }
+
+    /// Reads the current holding message and parses it from raw bytes into ASCII String.
+    /// If message buffer is not ASCII or is corrupted/invalid, returns nothing.
+    pub fn read_message(self) -> Option<String> {
+        let mut raw_bytes: &[u8] = &self.encrypted_message;
+        if raw_bytes.is_ascii() {
+            let mut msg = String::new();
+            if let Ok(_) = raw_bytes.read_to_string(&mut msg) {
+                return Some(msg);
+            }
+        }
+
+        None
     }
 }
 
@@ -142,7 +195,11 @@ impl ClientMessage {
         ClientMessage::ClientP2PAck(ClientP2PAck::new(fingerprint))
     }
 
-    pub fn build_p2p_payload(encrypted_message: Vec<u8>, mac: Vec<u8>, peer_id: String) -> Self {
+    pub fn build_p2p_payload(
+        encrypted_message: EncryptedMessage,
+        mac: MAC,
+        peer_id: UserID,
+    ) -> Self {
         ClientMessage::ClientP2PExchangePayload(ClientP2PExchangePayload::new(
             encrypted_message,
             mac,
@@ -154,10 +211,14 @@ impl ClientMessage {
         to_bytes::<rancor::Error>(msg)
     }
 
-    pub fn deserialize(bytes: &[u8]) -> Result<ClientMessage, rancor::Error> {
-        let archived: &<ClientMessage as Archive>::Archived =
-            access::<Archived<ClientMessage>, rancor::Error>(bytes).unwrap();
-        deserialize::<ClientMessage, rancor::Error>(archived)
+    pub fn deserialize(bytes: &[u8]) -> Result<ClientMessage, Error> {
+        let access_result: Result<&ArchivedClientMessage, rancor::Error> =
+            access::<Archived<ClientMessage>, rancor::Error>(bytes);
+        if let Err(_) = access_result {
+            return Err(Error::new(Other, "Could not deserialize ClientMessage"));
+        }
+        let archived: &<ClientMessage as Archive>::Archived = access_result.unwrap();
+        deserialize::<ClientMessage, Error>(archived)
     }
 }
 

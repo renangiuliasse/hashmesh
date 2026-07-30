@@ -14,8 +14,8 @@ use tokio::{
 };
 
 use crate::{
-    BUFFER_DEFAULT_SIZE, SoftwareVersion,
-    client::{ClientMessage, ClientP2PAck, Fingerprint, User},
+    BUFFER_DEFAULT_SIZE, MAC_SIZE, SoftwareVersion,
+    client::{ClientMessage, ClientP2PAck, EncryptedMessage, Fingerprint, MAC, User},
 };
 
 pub async fn p2p_initiate_handshake(
@@ -97,15 +97,16 @@ pub async fn p2p_waitfor_handshake(
     match stream.accept().await {
         Err(err) => return Err(err),
         Ok((mut curr_stream, _socket)) => {
-            let mut buf = [0; BUFFER_DEFAULT_SIZE];
+            let mut buf = [0u8; BUFFER_DEFAULT_SIZE];
 
             let read_result = curr_stream.read(&mut buf).await;
             if let Err(err) = read_result {
                 return Err(err);
             }
 
-            let buf_read = &buf[..read_result.unwrap()];
-            let ack_result = ClientMessage::deserialize(buf_read);
+            let bytes_read = read_result.unwrap();
+            let buf_read = &buf[..bytes_read];
+            let ack_result = ClientMessage::deserialize(&buf_read);
             if let Err(_) = ack_result {
                 return Err(Error::new(
                     Other,
@@ -153,9 +154,9 @@ pub async fn p2p_waitfor_handshake(
 pub async fn p2p_send_encrypted_message(
     mut stream: TcpStream,
     user: User,
-    encrypted_message: Vec<u8>,
-    mac: Vec<u8>
-) -> Result<(), Error> {
+    encrypted_message: EncryptedMessage,
+    mac: MAC,
+) -> Result<TcpStream, Error> {
     let payload = ClientMessage::build_p2p_payload(encrypted_message, mac, user.id);
     let serialization = ClientMessage::serialize(&payload);
     if let Err(_err) = serialization {
@@ -165,11 +166,12 @@ pub async fn p2p_send_encrypted_message(
         ));
     }
 
-    let buf = serialization.unwrap();
+    let buf_aligned = serialization.unwrap();
+    let buf = buf_aligned.as_slice();
 
-    let res = stream.write_all(&buf).await;
+    let res = stream.write_all(buf).await;
     match res {
         Err(err) => return Err(err),
-        Ok(()) => return Ok(()),
+        Ok(()) => return Ok(stream),
     }
 }
