@@ -9,9 +9,13 @@ on:
 env:
   CARGO_TERM_COLOR: always
 
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
 jobs:
   build:
-
     runs-on: ubuntu-latest
 
     steps:
@@ -37,7 +41,7 @@ jobs:
         cp -r target/doc/* docs/
 
     - name: Deploy to GitHub Pages
-      uses: peaceiris/actions-gh-pages@v4
+      uses: actions/deploy-pages@v5
       with:
         github_token: ${{ secrets.GITHUB_TOKEN }}
         publish_dir: ./docs
