@@ -64,7 +64,7 @@ impl User {
         buffer[0..min_len].copy_from_slice(&id_bytes[0..min_len]);
 
         let new_id: UserID = buffer;
-        return new_id;
+        new_id
     }
 
     /// Shears too big UserIDs
@@ -166,7 +166,7 @@ impl ClientP2PExchangePayload {
         let mut raw_bytes: &[u8] = &self.encrypted_message;
         if raw_bytes.is_ascii() {
             let mut msg = String::new();
-            if let Ok(_) = raw_bytes.read_to_string(&mut msg) {
+            if raw_bytes.read_to_string(&mut msg).is_ok() {
                 return Some(msg);
             }
         }
@@ -237,9 +237,7 @@ pub async fn ping(ip: String) -> Result<UdpSocket, std::io::Error> {
     }
 
     let udp_sock = udp_sock_result.unwrap();
-    if let Err(err) = udp_sock.send(&buffer).await {
-        return Err(err);
-    };
+    udp_sock.send(&buffer).await?;
 
     Ok(udp_sock)
 }

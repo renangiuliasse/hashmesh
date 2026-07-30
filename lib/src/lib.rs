@@ -100,7 +100,7 @@ pub fn pad_bytes<const F: usize>(bytes: &[u8], size: usize) -> [u8; F] {
 
     buffer[0..min_len].copy_from_slice(&bytes[0..min_len]);
 
-    return buffer;
+    buffer
 }
 
 /// Shears byte array to length "size" and removes left bytes
@@ -116,8 +116,8 @@ pub fn shear_bytes<const F: usize>(bytes: &[u8]) -> Option<[u8; F]> {
 pub fn fix_byte_buffer<const F: usize>(bytes: &[u8], size: usize) -> [u8; F] {
     match shear_bytes::<F>(bytes) {
         None => {
-            let new_bytes = pad_bytes::<F>(bytes, size);
-            new_bytes
+            
+            pad_bytes::<F>(bytes, size)
         }
         Some(new_bytes) => new_bytes,
     }

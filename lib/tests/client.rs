@@ -145,7 +145,7 @@ mod general_client_tests {
 
 #[cfg(test)]
 mod p2p_tests {
-    use std::{io::ErrorKind, time::Duration};
+    use std::{time::Duration};
 
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
@@ -157,7 +157,7 @@ mod p2p_tests {
         BUFFER_DEFAULT_SIZE, MAC_SIZE, SoftwareVersion, client::{
             ClientMessage, EncryptedMessage, Fingerprint, MAC, User,
             p2p::{p2p_initiate_handshake, p2p_send_encrypted_message, p2p_waitfor_handshake},
-        }, fix_byte_buffer, shear_bytes,
+        }, fix_byte_buffer,
     };
 
     use crate::get_free_port;
