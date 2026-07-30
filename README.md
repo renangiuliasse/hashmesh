@@ -1,6 +1,9 @@
 <div align='center'>
 
   [![build](https://github.com/renangiuliasse/hashmesh/actions/workflows/rust%20build.yml/badge.svg)](https://github.com/renangiuliasse/hashmesh/actions/workflows/rust%20build.yml)
+  [![Cargo doc](https://github.com/renangiuliasse/hashmesh/actions/workflows/rust%20doc%20with%20gh%20pages.yml/badge.svg)](https://github.com/renangiuliasse/hashmesh/actions/workflows/rust%20doc%20with%20gh%20pages.yml)
+
+  [library documentation](https://renangiuliasse.github.io/hashmesh/lib/)
   
 </div>
 
