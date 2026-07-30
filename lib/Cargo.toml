@@ -5,7 +5,7 @@ edition = "2024"
 
 [lints.clippy]
 todo = "deny"
-complexity = "warn"
+complexity = { level = "warn", priority = -1 }
 
 [dependencies]
 hex-literal = "1.1.0"

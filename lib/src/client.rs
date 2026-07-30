@@ -32,11 +32,11 @@
  * Not all of this information is shared at every architecture, it is type-dependent.
  */
 
-use std::io::{Error, ErrorKind::Other, Read};
+use std::io::{Error, ErrorKind::{InvalidData}, Read};
 
 use rkyv::{
     Archive, Archived, Deserialize, Serialize, access, deserialize, rancor, to_bytes,
-    util::AlignedVec,
+    util::AlignedVec
 };
 
 use tokio::net::UdpSocket;
@@ -103,6 +103,12 @@ impl User {
             id: [0; USER_ID_SIZE],
         };
         user.random_id()
+    }
+}
+
+impl Default for User {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -183,7 +189,7 @@ pub enum ClientMessage {
     ClientAck,
     Ping(Ping),
     ClientP2PAck(ClientP2PAck),
-    ClientP2PExchangePayload(ClientP2PExchangePayload),
+    ClientP2PExchangePayload(Box<ClientP2PExchangePayload>),
 }
 
 impl ClientMessage {
@@ -200,11 +206,11 @@ impl ClientMessage {
         mac: MAC,
         peer_id: UserID,
     ) -> Self {
-        ClientMessage::ClientP2PExchangePayload(ClientP2PExchangePayload::new(
+        ClientMessage::ClientP2PExchangePayload(Box::new(ClientP2PExchangePayload::new(
             encrypted_message,
             mac,
             peer_id,
-        ))
+        )))
     }
 
     pub fn serialize(msg: &ClientMessage) -> Result<AlignedVec, rancor::Error> {
@@ -214,11 +220,16 @@ impl ClientMessage {
     pub fn deserialize(bytes: &[u8]) -> Result<ClientMessage, Error> {
         let access_result: Result<&ArchivedClientMessage, rancor::Error> =
             access::<Archived<ClientMessage>, rancor::Error>(bytes);
-        if let Err(_) = access_result {
-            return Err(Error::new(Other, "Could not deserialize ClientMessage"));
+        if access_result.is_err() {
+            return Err(Error::new(InvalidData, "Could not access ClientMessage"));
         }
         let archived: &<ClientMessage as Archive>::Archived = access_result.unwrap();
-        deserialize::<ClientMessage, Error>(archived)
+        let deserialize: Result<ClientMessage, rancor::Error> = deserialize::<ClientMessage, rancor::Error>(archived);
+        if deserialize.is_err() {
+            return Err(Error::new(InvalidData, "Could not deserialize ClientMessage".to_string()))
+        }
+
+        Ok(deserialize.unwrap())
     }
 }
 

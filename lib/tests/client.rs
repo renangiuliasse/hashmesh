@@ -259,7 +259,7 @@ mod p2p_tests {
         let local_addr2 = local_addr.clone();
 
         let waiter = p2p_waitfor_handshake(local_addr2, server_fingerprint);
-        let waiter_thread = tokio::spawn(async move { waiter.await });
+        let waiter_thread = tokio::spawn(waiter);
 
         sleep(Duration::from_millis(500)).await;
 

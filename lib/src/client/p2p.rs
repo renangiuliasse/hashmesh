@@ -58,8 +58,8 @@ pub async fn p2p_initiate_handshake(
         ClientMessage::Ping(_) => {}
         ClientMessage::ClientP2PExchangePayload(_) => {}
         ClientMessage::ClientP2PAck(ack) => {
-            if ack.version != ack.version {
-                let v = SoftwareVersion::project_version();
+            let v = SoftwareVersion::project_version();
+            if v != ack.version {
                 return Err(
                     Error::other(
                         format!(
