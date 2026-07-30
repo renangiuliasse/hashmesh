@@ -1,3 +1,9 @@
+<div align='center'>
+
+  [![build](https://github.com/renangiuliasse/hashmesh/actions/workflows/rust%20build.yml/badge.svg)](https://github.com/renangiuliasse/hashmesh/actions/workflows/rust%20build.yml)
+  
+</div>
+
 # HashMesh
 HashMesh is decentralized, and peer-to-peer messaging application designed for robust and private communication. Built with Rust for performance and security, 
 HashMesh aims to provide a resilient communication network where users maintain control over their data, and share only what's needed.
