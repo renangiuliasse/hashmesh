@@ -5,6 +5,11 @@ on:
     branches: [ "dev" ]
   pull_request:
     branches: [ "dev" ]
+  workflow_dispatch:
+
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
 
 env:
   CARGO_TERM_COLOR: always
@@ -41,20 +46,13 @@ jobs:
 
     - name: Prepare documentation for GitHub Pages
       run: |
-        touch target/doc/.nojekyll
-        mkdir -p docs
-        cp -r target/doc/* docs/
         echo "<meta http-equiv=\"refresh\" content=\"0; url=build_wheel\">" > docs/index.html
 
-    # - name: Deploy to GitHub Pages
-    #   uses: peaceiris/actions-gh-pages@v4
-    #   id: deployment
-    #   with:
-    #     github_token: ${{ secrets.GITHUB_TOKEN }}
-    #     publish_dir: ./docs
+    - name: Upload artifact
+      uses: actions/upload-pages-artifact@v3
+      with:
+        path: ./target/doc
 
     - name: Deploy to GitHub Pages
       id: deployment
       uses: actions/deploy-pages@v4 # or specific "vX.X.X" version tag for this action
-      with:
-        publish_dir: ./docs
