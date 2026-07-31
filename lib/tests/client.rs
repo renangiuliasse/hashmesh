@@ -41,6 +41,7 @@ mod general_client_tests {
             ClientMessage::Ping(_) => return,
             ClientP2PAck(_) => {}
             ClientMessage::ClientP2PExchangePayload(_) => {}
+            ClientMessage::ClientDefaultHandshake(_) => {}
         }
 
         panic!("Incorrect type match after deserialization");
@@ -77,6 +78,7 @@ mod general_client_tests {
                 ClientMessage::ClientAck => panic!("Incorrect deserialized type"),
                 ClientMessage::ClientP2PAck(_ack) => panic!("Incorrect deserialized type"),
                 ClientMessage::ClientP2PExchangePayload(_) => panic!("Incorrect deserialized type"),
+                ClientMessage::ClientDefaultHandshake(_) => panic!("Incorrect deserialized type"),
             };
 
             let project_version = SoftwareVersion::project_version();
@@ -145,18 +147,17 @@ mod general_client_tests {
 
 #[cfg(test)]
 mod p2p_tests {
-    use std::{time::Duration};
+    use std::time::Duration;
 
     use tokio::{
-        io::{AsyncReadExt, AsyncWriteExt},
-        net::TcpListener,
-        time::sleep,
+        io::{AsyncReadExt, AsyncWriteExt}, net::TcpListener, stream, time::sleep,
     };
 
     use lib::{
         BUFFER_DEFAULT_SIZE, MAC_SIZE, SoftwareVersion, client::{
-            ClientMessage, EncryptedMessage, Fingerprint, MAC, User,
-            p2p::{p2p_initiate_handshake, p2p_send_encrypted_message, p2p_waitfor_handshake},
+            ClientMessage, User, listen_for_clientmessage, p2p::{
+                EncryptedMessage, Fingerprint, MAC, p2p_initiate_handshake, p2p_send_encrypted_message, treat_incoming_p2p_handshake,
+            },
         }, fix_byte_buffer,
     };
 
@@ -175,26 +176,25 @@ mod p2p_tests {
 
         let addr = local_addr.clone();
         let sv_fingerprint = server_fingerprint.clone();
-        let sv_fingerprint2 = server_fingerprint.clone();
         let cl_fingerprint = client_fingerprint.clone();
 
         let server_handle = tokio::spawn(async move {
-            let (_listener, received_ack) = p2p_waitfor_handshake(addr, sv_fingerprint)
-                .await
-                .expect("Server failed to wait for handshake");
-
-            assert_eq!(received_ack.fingerprint.key, cl_fingerprint.key);
-            assert_eq!(received_ack.version, SoftwareVersion::project_version());
+            let (mut stream, message) = listen_for_clientmessage(addr).await.expect("Server failed to wait for handshake");
+            if let ClientMessage::ClientP2PAck(ack) = message {
+                assert_eq!(ack.fingerprint.key, cl_fingerprint.key);
+                assert_eq!(ack.version, SoftwareVersion::project_version());
+                
+                treat_incoming_p2p_handshake(&mut stream, ack, server_fingerprint).await.expect("Could not treat incoming p2p handshake");
+            }
         });
 
         sleep(Duration::from_secs(2)).await;
 
-        let (_client_stream, received_ack) =
-            p2p_initiate_handshake(local_addr, client_fingerprint)
-                .await
-                .expect("Client failed to initiate handshake");
+        let (_client_stream, received_ack) = p2p_initiate_handshake(local_addr, client_fingerprint)
+            .await
+            .expect("Client failed to initiate handshake");
 
-        assert_eq!(received_ack.fingerprint.key, sv_fingerprint2.key);
+        assert_eq!(received_ack.fingerprint.key, sv_fingerprint.key);
         assert_eq!(received_ack.version, SoftwareVersion::project_version());
 
         server_handle.await.expect("Server task failed");
@@ -258,8 +258,13 @@ mod p2p_tests {
 
         let local_addr2 = local_addr.clone();
 
-        let waiter = p2p_waitfor_handshake(local_addr2, server_fingerprint);
-        let waiter_thread = tokio::spawn(waiter);
+        let waiter_thread = tokio::spawn(async move {
+            let (mut stream, message) = listen_for_clientmessage(local_addr2).await.expect("Could not listen for handshakes");
+            if let ClientMessage::ClientP2PAck(ack) = message {
+                treat_incoming_p2p_handshake(&mut stream, ack, server_fingerprint).await.expect("Could not treat incoming p2p handshake");
+            };
+            stream
+        });
 
         sleep(Duration::from_millis(500)).await;
 
@@ -268,27 +273,26 @@ mod p2p_tests {
         const MESSAGE: &str = "a random unencrypted message.";
 
         let sender_thread = tokio::spawn(async move {
-            let (stream, _) = p2p_initiate_handshake(local_addr, client_fingerprint)
+            let (mut stream, _) = p2p_initiate_handshake(local_addr, client_fingerprint)
                 .await
                 .expect("Could not start initiator client on sender thread");
 
             let message = MESSAGE.to_string();
 
-            let mac = fix_byte_buffer(&[7u8; MAC_SIZE], size_of::<MAC>());
+            let mac = fix_byte_buffer(&[9u8; MAC_SIZE], size_of::<MAC>());
             let msg_bytes = fix_byte_buffer(message.as_bytes(), size_of::<EncryptedMessage>());
 
             let user = User::new();
-            let mut stream = p2p_send_encrypted_message(stream, user, msg_bytes, mac)
+            let stream = p2p_send_encrypted_message(&mut stream, user, msg_bytes, mac)
                 .await
                 .expect("Could not send message on sender thread");
 
             let _ = stream.shutdown().await;
         });
 
-        let (mut stream, _) = waiter_thread
+        let mut stream = waiter_thread
             .await
-            .expect("Could not finish waiter thread")
-            .expect("Could not extract TcpStream from waiter thread");
+            .expect("Could not finish waiter thread");
 
         let bytes_read = stream
             .read(&mut buf)
@@ -297,23 +301,18 @@ mod p2p_tests {
         let data = &buf[..bytes_read];
         let data_message = ClientMessage::deserialize(data).expect("Could not deserialize object");
 
-        let _ = sender_thread.await;
+        sender_thread.await.expect("could not join thread");
 
-        match data_message {
-            ClientMessage::ClientAck => {}
-            ClientMessage::ClientP2PAck(_) => {}
-            ClientMessage::Ping(_) => {}
-            ClientMessage::ClientP2PExchangePayload(payload) => {
-                let message_received = payload
-                    .read_message()
-                    .expect("Could not read string, invalid");
+        if let ClientMessage::ClientP2PExchangePayload(payload) = data_message {
+            let message_received = payload
+                .read_message()
+                .expect("Could not read string, invalid");
 
-                // as we know it is unencrypted, we can just filter null bytes and read it as a string
-                let message_bytes = message_received.into_bytes();
-                let message = str::from_utf8(&message_bytes).unwrap();
-                let fixed_message: String = message.chars().filter(|c| *c != '\0').collect();
-                assert_eq!(fixed_message, MESSAGE.to_string());
-            }
+            // as we know it is unencrypted, we can just filter null bytes and read it as a string
+            let message_bytes = message_received.into_bytes();
+            let message = str::from_utf8(&message_bytes).unwrap();
+            let fixed_message: String = message.chars().filter(|c| *c != '\0').collect();
+            assert_eq!(fixed_message, MESSAGE.to_string());
         }
     }
 }

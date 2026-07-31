@@ -32,18 +32,26 @@
  * Not all of this information is shared at every architecture, it is type-dependent.
  */
 
-use std::io::{Error, ErrorKind::{InvalidData}, Read};
-
-use rkyv::{
-    Archive, Archived, Deserialize, Serialize, access, deserialize, rancor, to_bytes,
-    util::AlignedVec
+use std::io::{
+    Error,
+    ErrorKind::{ConnectionRefused, InvalidData, Other},
 };
 
-use tokio::net::UdpSocket;
+use rkyv::{
+    Archive, ArchiveUnsized, Archived, Deserialize, DeserializeUnsized, Serialize, access,
+    deserialize, rancor, to_bytes, util::AlignedVec,
+};
+
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt}, net::{TcpListener, TcpStream, UdpSocket},
+};
 use uuid::Uuid;
 
 use crate::{
-    ClientPossibleArchitecture, MAC_SIZE, MESSAGE_MAX_SIZE, Ping, SoftwareVersion, USER_ID_SIZE,
+    BUFFER_DEFAULT_SIZE, ClientPossibleArchitecture, Message, Ping, SoftwareVersion, USER_ID_SIZE,
+    client::p2p::{
+        ClientP2PAck, ClientP2PExchangePayload, EncryptedMessage, Fingerprint, MAC, UserID,
+    },
 };
 
 pub mod p2p;
@@ -114,70 +122,18 @@ impl Default for User {
 
 #[derive(Archive, Serialize, Deserialize, Debug, PartialEq)]
 #[rkyv(compare(PartialEq), derive(Debug))]
-pub struct ClientAck {
+pub struct ClientDefaultHandshake {
     version: SoftwareVersion,
-    own_uid: String,
+    own_id: UserID,
     target_type: ClientPossibleArchitecture,
 }
-
-#[derive(Archive, Serialize, Deserialize, Debug, PartialEq, Clone)]
-#[rkyv(compare(PartialEq), derive(Debug))]
-pub struct Fingerprint {
-    pub key: String,
-}
-
-/// Client P2P ACK Handshake, used to initiate or to respond to a handshake P2P connection.
-#[derive(Archive, Serialize, Deserialize, Debug, PartialEq)]
-#[rkyv(compare(PartialEq), derive(Debug))]
-pub struct ClientP2PAck {
-    pub version: SoftwareVersion,
-    pub fingerprint: Fingerprint,
-}
-
-impl ClientP2PAck {
-    pub fn new(fingerprint: Fingerprint) -> Self {
-        ClientP2PAck {
+impl ClientDefaultHandshake {
+    pub fn new(user: &User, target_type: ClientPossibleArchitecture) -> Self {
+        Self {
             version: SoftwareVersion::project_version(),
-            fingerprint,
+            own_id: user.id,
+            target_type,
         }
-    }
-}
-
-// be very careful with these values as they need to fit under the DEFAULT_BUFFER_SIZE const.
-pub type EncryptedMessage = [u8; MESSAGE_MAX_SIZE];
-pub type MAC = [u8; MAC_SIZE];
-pub type UserID = [u8; USER_ID_SIZE];
-
-/// Used to transport and receive a structed payload (message) from another peer.
-#[derive(Archive, Serialize, Deserialize, Debug, PartialEq)]
-#[rkyv(compare(PartialEq), derive(Debug))]
-pub struct ClientP2PExchangePayload {
-    encrypted_message: EncryptedMessage,
-    mac: MAC,
-    peer_id: UserID,
-}
-
-impl ClientP2PExchangePayload {
-    pub fn new(encrypted_message: EncryptedMessage, mac: MAC, peer_id: UserID) -> Self {
-        ClientP2PExchangePayload {
-            encrypted_message,
-            mac,
-            peer_id,
-        }
-    }
-
-    /// Reads the current holding message and parses it from raw bytes into ASCII String.
-    /// If message buffer is not ASCII or is corrupted/invalid, returns nothing.
-    pub fn read_message(self) -> Option<String> {
-        let mut raw_bytes: &[u8] = &self.encrypted_message;
-        if raw_bytes.is_ascii() {
-            let mut msg = String::new();
-            if raw_bytes.read_to_string(&mut msg).is_ok() {
-                return Some(msg);
-            }
-        }
-
-        None
     }
 }
 
@@ -188,8 +144,11 @@ impl ClientP2PExchangePayload {
 pub enum ClientMessage {
     ClientAck,
     Ping(Ping),
+
     ClientP2PAck(ClientP2PAck),
     ClientP2PExchangePayload(Box<ClientP2PExchangePayload>),
+
+    ClientDefaultHandshake(ClientDefaultHandshake),
 }
 
 impl ClientMessage {
@@ -224,9 +183,13 @@ impl ClientMessage {
             return Err(Error::new(InvalidData, "Could not access ClientMessage"));
         }
         let archived: &<ClientMessage as Archive>::Archived = access_result.unwrap();
-        let deserialize: Result<ClientMessage, rancor::Error> = deserialize::<ClientMessage, rancor::Error>(archived);
+        let deserialize: Result<ClientMessage, rancor::Error> =
+            deserialize::<ClientMessage, rancor::Error>(archived);
         if deserialize.is_err() {
-            return Err(Error::new(InvalidData, "Could not deserialize ClientMessage".to_string()))
+            return Err(Error::new(
+                InvalidData,
+                "Could not deserialize ClientMessage".to_string(),
+            ));
         }
 
         Ok(deserialize.unwrap())
@@ -235,8 +198,8 @@ impl ClientMessage {
 
 /// Pings another device. It can either be a Client/Peer or a Node (Server). It **does not establish** a connection,
 /// it serializes, and fires a single Ping UDP packet, and then either:
-/// - returns the alive UDP socket
-/// - returns the Error object
+/// - returns the alive [UdpSocket]
+/// - returns the [Error] object
 pub async fn ping(ip: String) -> Result<UdpSocket, std::io::Error> {
     let ping_message = ClientMessage::build_ping();
 
@@ -251,4 +214,108 @@ pub async fn ping(ip: String) -> Result<UdpSocket, std::io::Error> {
     udp_sock.send(&buffer).await?;
 
     Ok(udp_sock)
+}
+
+/// Using the TCP Stream provided, initiates the default handshake protocol and returns:
+/// - On sucess: a tuple of the current (used) mutable reference for [TcpStream] and the [Message] object received.
+/// - On error: [Error]
+pub async fn send_default_hanshake<'a>(
+    stream: &'a mut TcpStream,
+    user: &User,
+    target_type: ClientPossibleArchitecture,
+) -> Result<(&'a mut TcpStream, Message), Error> {
+    let handshake =
+        ClientMessage::ClientDefaultHandshake(ClientDefaultHandshake::new(user, target_type));
+    let serialization = ClientMessage::serialize(&handshake);
+    if serialization.is_err() {
+        return Err(Error::new(
+            InvalidData,
+            "Could not serialize default handshake",
+        ));
+    }
+
+    let payload = serialization.unwrap();
+    let write_result = stream.write_all(&payload).await;
+    let _ = stream.flush().await;
+    if write_result.is_err() {
+        return Err(Error::new(
+            ConnectionRefused,
+            "Could not send handshake payload",
+        ));
+    }
+
+    let mut buf = [0u8; BUFFER_DEFAULT_SIZE];
+    let recv_reading = stream.read(&mut buf).await;
+    if recv_reading.is_err() {
+        return Err(Error::new(Other, "Could not read received payload"));
+    }
+
+    let recv = &buf[..recv_reading.unwrap()];
+    let message_res = Message::deserialize(recv);
+    if message_res.is_err() {
+        return Err(Error::new(
+            InvalidData,
+            "Could not deserialize received Message",
+        ));
+    }
+
+    let message: Message = message_res.unwrap();
+
+    Ok((stream, message))
+}
+
+/// Using the TCP Stream provided, resolves the incoming default handshake protocol and returns:
+/// - On sucess: a tuple of the current (used) mutable reference for the [TcpStream] and the [Message] object received.
+/// - On error: [Error]
+pub async fn treat_incoming_default_handshake<'a>(
+    stream: &'a mut TcpStream,
+    incoming_handshake: ClientDefaultHandshake,
+    user: &User,
+    target_type: ClientPossibleArchitecture,
+) -> Result<&'a mut TcpStream, Error> {
+    let ver = SoftwareVersion::project_version();
+    if ver != incoming_handshake.version {
+        return Err(Error::new(
+            Other,
+            "Incoming software version is different from Client",
+        ));
+    }
+    if target_type != incoming_handshake.target_type {
+        return Err(Error::new(
+            Other,
+            "Incoming architecture type is different than the Client desired one",
+        ));
+    }
+
+    let sending_handshake =
+        ClientMessage::ClientDefaultHandshake(ClientDefaultHandshake::new(user, target_type));
+    let payload_result = ClientMessage::serialize(&sending_handshake);
+    if payload_result.is_err() {
+        return Err(Error::new(
+            InvalidData,
+            "Could not serialize sending handshake payload",
+        ));
+    }
+
+    let payload = payload_result.unwrap();
+    let _ = stream.write_all(&payload).await;
+    let _ = stream.flush().await;
+
+    Ok(stream)
+}
+
+pub async fn listen_for_clientmessage(addr: String) -> Result<(TcpStream, ClientMessage), Error> {
+    let listener = TcpListener::bind(addr).await.expect("Could not bind listener to address");
+    match listener.accept().await {
+        Err(e) => Err(e),
+        Ok((mut stream, _socket)) => {
+            let mut buf = [0u8; BUFFER_DEFAULT_SIZE];
+            let read_bytes = stream.read(&mut buf).await?;
+
+            let data = &buf[..read_bytes];
+            let message = ClientMessage::deserialize(data)?;
+
+            Ok((stream, message))
+        }
+    }
 }

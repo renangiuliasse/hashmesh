@@ -1,5 +1,5 @@
 /*!
- * Low-level library that handles (at least should) handle many common
+ * Low-level library that handles (at least should) many common
  * abstractions and features for both the Server (Node) and the Client.
  *
  * ## Some things aren't really to pay attention!
@@ -10,10 +10,14 @@
  * objects and information.
  */
 
-use rkyv::{Archive, Deserialize, Serialize};
-use std::
-    fmt::Debug
-;
+use rkyv::{
+    Archive, Archived, Deserialize, Serialize, access, deserialize, rancor, to_bytes,
+    util::AlignedVec,
+};
+use std::{
+    fmt::Debug,
+    io::{Error, ErrorKind::InvalidData},
+};
 
 use crate::client::ClientMessage;
 
@@ -86,11 +90,41 @@ impl Ping {
     }
 }
 
+#[derive(Archive, Serialize, Deserialize, Debug, PartialEq)]
+#[rkyv(compare(PartialEq), derive(Debug))]
+pub struct DenialReasonMessage {
+    reason: String,
+}
+
 #[derive(Debug, Serialize, Deserialize, PartialEq, Archive)]
 #[rkyv(compare(PartialEq), derive(Debug))]
-enum Message {
+pub enum Message {
     ClientMessage(ClientMessage),
     NodeMessage,
+}
+impl Message {
+    pub fn serialize(msg: &Message) -> Result<AlignedVec, rancor::Error> {
+        to_bytes::<rancor::Error>(msg)
+    }
+
+    pub fn deserialize(bytes: &[u8]) -> Result<Message, Error> {
+        let access_result: Result<&ArchivedMessage, rancor::Error> =
+            access::<Archived<Message>, rancor::Error>(bytes);
+        if access_result.is_err() {
+            return Err(Error::new(InvalidData, "Could not access Message"));
+        }
+        let archived: &<Message as Archive>::Archived = access_result.unwrap();
+        let deserialize: Result<Message, rancor::Error> =
+            deserialize::<Message, rancor::Error>(archived);
+        if deserialize.is_err() {
+            return Err(Error::new(
+                InvalidData,
+                "Could not deserialize Message".to_string(),
+            ));
+        }
+
+        Ok(deserialize.unwrap())
+    }
 }
 
 /// Fixes byte array to length "size" and fills missing bytes
@@ -115,10 +149,7 @@ pub fn shear_bytes<const F: usize>(bytes: &[u8]) -> Option<[u8; F]> {
 /// Fixes byte array to length "size" by either removing or padding bytes
 pub fn fix_byte_buffer<const F: usize>(bytes: &[u8], size: usize) -> [u8; F] {
     match shear_bytes::<F>(bytes) {
-        None => {
-            
-            pad_bytes::<F>(bytes, size)
-        }
+        None => pad_bytes::<F>(bytes, size),
         Some(new_bytes) => new_bytes,
     }
 }
