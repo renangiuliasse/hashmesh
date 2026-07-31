@@ -139,7 +139,7 @@ impl ClientDefaultHandshake {
 }
 
 /// A Client Message can be in many forms, could be a message payload or
-/// just a handshake, all of them are located here
+/// just a handshake. all of them are located here
 #[derive(Archive, Serialize, Deserialize, Debug, PartialEq)]
 #[rkyv(compare(PartialEq), derive(Debug))]
 pub enum ClientMessage {
@@ -218,7 +218,7 @@ pub async fn ping(ip: String) -> Result<UdpSocket, std::io::Error> {
 }
 
 /// Using the TCP Stream provided, initiates the default handshake protocol and returns:
-/// - On sucess: a tuple of the current (used) mutable reference for [TcpStream] and the [Message] object received.
+/// - On sucess: a tuple of the current (used) mutable reference for the TCP stream and the [Message] object received.
 /// - On error: [Error]
 pub async fn send_default_hanshake<'a>(
     stream: &'a mut TcpStream,
@@ -266,7 +266,7 @@ pub async fn send_default_hanshake<'a>(
 }
 
 /// Using the TCP Stream provided, resolves the incoming default handshake protocol and returns:
-/// - On sucess: a tuple of the current (used) mutable reference for the [TcpStream] and the [Message] object received.
+/// - On sucess: a tuple of the current (used) mutable reference for the TCP Stream and the [Message] object received.
 /// - On error: [Error]
 pub async fn treat_incoming_default_handshake<'a>(
     stream: &'a mut TcpStream,
@@ -305,6 +305,9 @@ pub async fn treat_incoming_default_handshake<'a>(
     Ok(stream)
 }
 
+/// Sets up a TcpListener on IP `addr` waiting for a single incoming connection and
+/// - On sucess: deserializes it into a [ClientMessage] object, returning a tuple ([tokio::net::tcp::stream::TcpStream], [ClientMessage])
+/// - On error: returns the error message
 pub async fn listen_for_clientmessage(addr: String) -> Result<(TcpStream, ClientMessage), Error> {
     let listener = TcpListener::bind(addr)
         .await

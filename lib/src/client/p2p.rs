@@ -86,6 +86,9 @@ impl ClientP2PExchangePayload {
     }
 }
 
+/// Sets up a TCP stream and connects to `ip`, resolves the P2P handshake providing `fingerprint` and
+/// - On sucess: returns a tuple the used TCP stream and the received [ClientP2PAck] during the handshake
+/// - On error: returns the error message
 pub async fn p2p_initiate_handshake(
     ip: String,
     fingerprint: Fingerprint,
@@ -165,7 +168,7 @@ pub async fn treat_incoming_p2p_handshake(
     Ok(stream)
 }
 
-/// Sends a encrypted message and resolves all serialization and payload through the current [TcpStream]
+/// Sends a encrypted message and resolves all serialization and payload through the current TCP stream
 pub async fn p2p_send_encrypted_message(
     stream: &mut TcpStream,
     user: User,
