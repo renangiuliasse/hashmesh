@@ -38,7 +38,7 @@ use std::io::{
 };
 
 use rkyv::{
-    Archive, ArchiveUnsized, Archived, Deserialize, DeserializeUnsized, Serialize, access,
+    Archive, Archived, Deserialize, Serialize, access,
     deserialize, rancor, to_bytes, util::AlignedVec,
 };
 

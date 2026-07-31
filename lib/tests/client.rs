@@ -152,7 +152,6 @@ mod p2p_tests {
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
         net::TcpListener,
-        stream,
         time::sleep,
     };
 
