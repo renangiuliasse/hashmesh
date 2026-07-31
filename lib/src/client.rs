@@ -38,8 +38,8 @@ use std::io::{
 };
 
 use rkyv::{
-    Archive, Archived, Deserialize, Serialize, access,
-    deserialize, rancor, to_bytes, util::AlignedVec,
+    Archive, Archived, Deserialize, Serialize, access, deserialize, rancor, to_bytes,
+    util::AlignedVec,
 };
 
 use tokio::{
@@ -135,6 +135,13 @@ impl ClientDefaultHandshake {
             own_id: user.id,
             target_type,
         }
+    }
+
+    pub fn get_version(&self) -> SoftwareVersion {
+        self.version
+    }
+    pub fn get_target_type(&self) -> ClientPossibleArchitecture {
+        self.target_type
     }
 }
 

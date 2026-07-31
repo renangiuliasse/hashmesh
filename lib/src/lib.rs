@@ -19,7 +19,7 @@ use std::{
     io::{Error, ErrorKind::InvalidData},
 };
 
-use crate::client::ClientMessage;
+use crate::{client::ClientMessage, node::NodeMessage};
 
 pub mod client;
 pub mod node;
@@ -30,7 +30,7 @@ pub enum ArchitectureType {
     ClientPossibleArchitecture,
     NodePossibleArchitecture,
 }
-#[derive(Archive, Serialize, Deserialize, Debug, PartialEq)]
+#[derive(Archive, Serialize, Deserialize, Debug, PartialEq, Clone, Copy)]
 #[rkyv(compare(PartialEq), derive(Debug))]
 pub enum ClientPossibleArchitecture {
     P2P,
@@ -38,7 +38,7 @@ pub enum ClientPossibleArchitecture {
     Shout,
     Neighbour,
 }
-#[derive(Archive, Serialize, Deserialize, Debug, PartialEq)]
+#[derive(Archive, Serialize, Deserialize, Debug, PartialEq, Clone, Copy)]
 #[rkyv(compare(PartialEq), derive(Debug))]
 pub enum NodePossibleArchitecture {
     Shout,
@@ -50,7 +50,15 @@ pub const MAC_SIZE: usize = 64;
 pub const USER_ID_SIZE: usize = 32;
 pub const MESSAGE_MAX_SIZE: usize = 2048;
 
-#[derive(Debug, Serialize, Deserialize, PartialEq, Archive)]
+pub fn get_free_port() -> u16 {
+    std::net::TcpListener::bind("127.0.0.1:0")
+        .expect("Failed to bind to an ephemeral port")
+        .local_addr()
+        .expect("Failed to get local address")
+        .port()
+}
+
+#[derive(Debug, Serialize, Deserialize, PartialEq, Archive, Copy, Clone)]
 #[rkyv(compare(PartialEq), derive(Debug))]
 pub struct SoftwareVersion {
     pub major: u32,
@@ -100,7 +108,7 @@ pub struct DenialReasonMessage {
 #[rkyv(compare(PartialEq), derive(Debug))]
 pub enum Message {
     ClientMessage(ClientMessage),
-    NodeMessage,
+    NodeMessage(NodeMessage),
 }
 impl Message {
     pub fn serialize(msg: &Message) -> Result<AlignedVec, rancor::Error> {

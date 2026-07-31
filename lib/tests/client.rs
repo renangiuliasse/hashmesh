@@ -1,11 +1,3 @@
-fn get_free_port() -> u16 {
-    std::net::TcpListener::bind("127.0.0.1:0")
-        .expect("Failed to bind to an ephemeral port")
-        .local_addr()
-        .expect("Failed to get local address")
-        .port()
-}
-
 #[cfg(test)]
 mod general_client_tests {
     use std::time::Duration;
@@ -164,10 +156,8 @@ mod p2p_tests {
                 p2p_send_encrypted_message, treat_incoming_p2p_handshake,
             },
         },
-        fix_byte_buffer,
+        fix_byte_buffer, get_free_port,
     };
-
-    use crate::get_free_port;
 
     #[tokio::test]
     async fn p2p_handshake_success() {
@@ -198,7 +188,7 @@ mod p2p_tests {
             }
         });
 
-        sleep(Duration::from_secs(2)).await;
+        sleep(Duration::from_millis(100)).await;
 
         let (_client_stream, received_ack) = p2p_initiate_handshake(local_addr, client_fingerprint)
             .await
