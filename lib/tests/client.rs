@@ -150,15 +150,22 @@ mod p2p_tests {
     use std::time::Duration;
 
     use tokio::{
-        io::{AsyncReadExt, AsyncWriteExt}, net::TcpListener, stream, time::sleep,
+        io::{AsyncReadExt, AsyncWriteExt},
+        net::TcpListener,
+        stream,
+        time::sleep,
     };
 
     use lib::{
-        BUFFER_DEFAULT_SIZE, MAC_SIZE, SoftwareVersion, client::{
-            ClientMessage, User, listen_for_clientmessage, p2p::{
-                EncryptedMessage, Fingerprint, MAC, p2p_initiate_handshake, p2p_send_encrypted_message, treat_incoming_p2p_handshake,
+        BUFFER_DEFAULT_SIZE, MAC_SIZE, SoftwareVersion,
+        client::{
+            ClientMessage, User, listen_for_clientmessage,
+            p2p::{
+                EncryptedMessage, Fingerprint, MAC, p2p_initiate_handshake,
+                p2p_send_encrypted_message, treat_incoming_p2p_handshake,
             },
-        }, fix_byte_buffer,
+        },
+        fix_byte_buffer,
     };
 
     use crate::get_free_port;
@@ -179,12 +186,16 @@ mod p2p_tests {
         let cl_fingerprint = client_fingerprint.clone();
 
         let server_handle = tokio::spawn(async move {
-            let (mut stream, message) = listen_for_clientmessage(addr).await.expect("Server failed to wait for handshake");
+            let (mut stream, message) = listen_for_clientmessage(addr)
+                .await
+                .expect("Server failed to wait for handshake");
             if let ClientMessage::ClientP2PAck(ack) = message {
                 assert_eq!(ack.fingerprint.key, cl_fingerprint.key);
                 assert_eq!(ack.version, SoftwareVersion::project_version());
-                
-                treat_incoming_p2p_handshake(&mut stream, ack, server_fingerprint).await.expect("Could not treat incoming p2p handshake");
+
+                treat_incoming_p2p_handshake(&mut stream, ack, server_fingerprint)
+                    .await
+                    .expect("Could not treat incoming p2p handshake");
             }
         });
 
@@ -259,9 +270,13 @@ mod p2p_tests {
         let local_addr2 = local_addr.clone();
 
         let waiter_thread = tokio::spawn(async move {
-            let (mut stream, message) = listen_for_clientmessage(local_addr2).await.expect("Could not listen for handshakes");
+            let (mut stream, message) = listen_for_clientmessage(local_addr2)
+                .await
+                .expect("Could not listen for handshakes");
             if let ClientMessage::ClientP2PAck(ack) = message {
-                treat_incoming_p2p_handshake(&mut stream, ack, server_fingerprint).await.expect("Could not treat incoming p2p handshake");
+                treat_incoming_p2p_handshake(&mut stream, ack, server_fingerprint)
+                    .await
+                    .expect("Could not treat incoming p2p handshake");
             };
             stream
         });
@@ -290,9 +305,7 @@ mod p2p_tests {
             let _ = stream.shutdown().await;
         });
 
-        let mut stream = waiter_thread
-            .await
-            .expect("Could not finish waiter thread");
+        let mut stream = waiter_thread.await.expect("Could not finish waiter thread");
 
         let bytes_read = stream
             .read(&mut buf)

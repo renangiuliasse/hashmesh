@@ -43,7 +43,8 @@ use rkyv::{
 };
 
 use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt}, net::{TcpListener, TcpStream, UdpSocket},
+    io::{AsyncReadExt, AsyncWriteExt},
+    net::{TcpListener, TcpStream, UdpSocket},
 };
 use uuid::Uuid;
 
@@ -305,7 +306,9 @@ pub async fn treat_incoming_default_handshake<'a>(
 }
 
 pub async fn listen_for_clientmessage(addr: String) -> Result<(TcpStream, ClientMessage), Error> {
-    let listener = TcpListener::bind(addr).await.expect("Could not bind listener to address");
+    let listener = TcpListener::bind(addr)
+        .await
+        .expect("Could not bind listener to address");
     match listener.accept().await {
         Err(e) => Err(e),
         Ok((mut stream, _socket)) => {

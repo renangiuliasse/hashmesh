@@ -8,7 +8,7 @@ use rkyv::{Archive, Deserialize, Serialize};
 use std::io::{Error, ErrorKind::Other, Read};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
-    net::{TcpListener, TcpStream},
+    net::TcpStream,
 };
 
 use crate::{
@@ -147,19 +147,18 @@ pub async fn treat_incoming_p2p_handshake(
 ) -> Result<&mut TcpStream, std::io::Error> {
     let v = SoftwareVersion::project_version();
     if v != ack.version {
-        return Err(
-            Error::other(
-                format!(
-                    "Peer's software version is mismatched. Running {}.{}.{}, peer's running {}.{}.{}", 
-                    v.major, v.minor, v.patch, ack.version.major, ack.version.minor, ack.version.patch
-                ).to_string()
+        return Err(Error::other(
+            format!(
+                "Peer's software version is mismatched. Running {}.{}.{}, peer's running {}.{}.{}",
+                v.major, v.minor, v.patch, ack.version.major, ack.version.minor, ack.version.patch
             )
-        );
+            .to_string(),
+        ));
     }
 
     let ack_response = ClientMessage::build_p2p_ack(fingerprint);
-    let ack_response_bytes = ClientMessage::serialize(&ack_response)
-        .expect("Could not serialize an ACK response.");
+    let ack_response_bytes =
+        ClientMessage::serialize(&ack_response).expect("Could not serialize an ACK response.");
 
     let _byte_amount = stream.write(&ack_response_bytes).await?;
 
